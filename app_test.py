@@ -1,5 +1,4 @@
-﻿
-import json
+﻿import json
 import math
 import re
 from pathlib import Path
@@ -33,8 +32,9 @@ STOP_WORDS = {
     "this", "that", "these", "those", "we", "you",
     "your", "their", "they", "our", "can", "could",
     "would", "should", "function", "please", "about",
-    "give", "define", "into"
+    "give", "define", "into", "called", "mean"
 }
+
 
 TOPIC_TERMS = {
     "rainbow": {
@@ -53,7 +53,9 @@ TOPIC_TERMS = {
         "eye", "lens", "retina", "image", "light",
         "focus", "focused", "focal", "distance",
         "crystalline", "cornea", "forms", "formation",
-        "accommodation"
+        "accommodation", "ciliary", "muscles",
+        "near", "distant", "vision", "eyeball",
+        "presbyopia", "myopia", "hypermetropia"
     },
     "photosynthesis": {
         "photosynthesis", "plants", "plant", "sunlight",
@@ -196,29 +198,38 @@ def split_sentences(text):
 
 def detect_topic(question):
     q = question.lower()
+    words = set(tokenize(q))
 
-    if "rainbow" in q:
+    if "rainbow" in words:
         return "rainbow"
 
-    if "twinkle" in q or "twinkling" in q:
+    if "twinkle" in words or "twinkling" in words:
         return "twinkle"
 
-    if "eye" in q and "lens" in q:
+    # Recognize eye-related questions even when "lens"
+    # is not explicitly included in the question.
+    eye_terms = {
+        "eye", "lens", "retina", "cornea", "accommodation",
+        "presbyopia", "myopia", "hypermetropia", "eyeball",
+        "vision", "ciliary"
+    }
+
+    if words & eye_terms:
         return "eye_lens"
 
-    if "photosynthesis" in q:
+    if "photosynthesis" in words or "chlorophyll" in words:
         return "photosynthesis"
 
-    if "gravity" in q or "gravitational" in q:
+    if "gravity" in words or "gravitational" in words:
         return "gravity"
 
-    if "evaporation" in q or "evaporate" in q:
+    if "evaporation" in words or "evaporate" in words:
         return "evaporation"
 
-    if "dispersion" in q:
+    if "dispersion" in words:
         return "dispersion"
 
-    if "refraction" in q or "refract" in q:
+    if "refraction" in words or "refract" in words:
         return "refraction"
 
     return None
@@ -285,7 +296,10 @@ def score_passage(question, passage_text):
     required_terms = {
         "rainbow": ("rainbow",),
         "twinkle": ("twinkle", "twinkling", "starlight"),
-        "eye_lens": ("lens", "retina", "focal length"),
+        "eye_lens": (
+            "lens", "retina", "focal length", "accommodation",
+            "cornea", "eyeball", "ciliary muscles", "presbyopia"
+        ),
         "photosynthesis": (
             "photosynthesis", "chlorophyll", "carbon dioxide"
         ),
@@ -302,7 +316,6 @@ def score_passage(question, passage_text):
         ):
             score *= 0.20
 
-    # Reward passages that explicitly mention the requested topic.
     if topic and topic.replace("_", " ") in lower_text:
         score += 0.10
 
@@ -353,8 +366,6 @@ def sentence_matches_topic(topic, sentence):
     lower = sentence.lower()
 
     if topic == "photosynthesis":
-        # Match photosynthesis concepts, but reject unrelated sentences
-        # that happen to mention carbon dioxide or oxygen.
         return (
             "photosynthesis" in lower
             or "chlorophyll" in lower
@@ -393,7 +404,10 @@ def sentence_matches_topic(topic, sentence):
             term in lower
             for term in (
                 "lens", "retina", "focal length",
-                "accommodation", "cornea"
+                "accommodation", "cornea", "ciliary muscles",
+                "presbyopia", "myopia", "hypermetropia",
+                "eyeball", "near point", "far point",
+                "power of accommodation", "vision"
             )
         )
 
@@ -422,7 +436,6 @@ def score_sentence(question, sentence, passage_score):
 
     topic = detect_topic(question)
 
-    # Reject sentences that do not match the requested topic.
     if topic and not sentence_matches_topic(topic, sentence):
         return -1.0
 
@@ -442,6 +455,54 @@ def score_sentence(question, sentence, passage_score):
         score += 0.06
 
     lower = sentence.lower()
+    question_lower = question.lower()
+
+    # Give direct definitions priority for definition questions.
+    if is_definition_question(question):
+        if topic == "eye_lens":
+            definition_patterns = (
+                "ability of the eye lens to adjust its focal length",
+                "ability of the eye lens to adjust",
+                "called accommodation",
+            )
+
+            if (
+                "accommodation" in question_lower
+                and any(pattern in lower for pattern in definition_patterns)
+            ):
+                score += 2.0
+
+            if (
+                "retina" in question_lower
+                and "retina" in lower
+                and any(
+                    term in lower
+                    for term in ("image", "light-sensitive", "light sensitive")
+                )
+            ):
+                score += 0.60
+
+            if (
+                "cornea" in question_lower
+                and "cornea" in lower
+                and "refraction" in lower
+            ):
+                score += 0.60
+
+        if topic == "rainbow" and "rainbow" in lower:
+            score += 0.40
+
+        if topic == "twinkle" and (
+            "twinkling effect" in lower
+            or "twinkle" in lower
+        ):
+            score += 0.40
+
+        if topic == "photosynthesis" and (
+            "photosynthesis" in lower
+            and ("process" in lower or "plants" in lower)
+        ):
+            score += 0.60
 
     if topic == "rainbow":
         if "dispersion of sunlight" in lower:
@@ -466,10 +527,14 @@ def score_sentence(question, sentence, passage_score):
             score += 0.15
 
     elif topic == "eye_lens":
+        if "ability of the eye lens to adjust its focal length" in lower:
+            score += 1.50
+        if "called accommodation" in lower:
+            score += 0.50
         if "forms an image" in lower:
             score += 0.60
         if "retina" in lower:
-            score += 0.40
+            score += 0.20
         if "focal length" in lower:
             score += 0.30
         if "focus objects" in lower:
@@ -605,7 +670,6 @@ def select_answer(question, passages):
         ):
             continue
 
-        # Final topic check before adding a sentence to the answer.
         if topic and not sentence_matches_topic(topic, sentence):
             continue
 
@@ -634,7 +698,7 @@ def select_answer(question, passages):
 
         limit = (
             1
-            if topic == "dispersion" and definition_question
+            if definition_question
             else MAX_ANSWER_SENTENCES
         )
 
@@ -645,18 +709,20 @@ def select_answer(question, passages):
         item["sentence"] for item in selected
     ]
 
-    source_ids = []
-
-    for item in selected:
-        if item["passage_id"] not in source_ids:
-            source_ids.append(item["passage_id"])
-
     sources_by_id = {
         passage["id"]: passage
         for passage in ranked_passages
     }
 
     relevant_sources = []
+    source_ids = []
+
+    # Prefer sources that actually contributed to the answer.
+    for item in selected:
+        passage_id = item["passage_id"]
+
+        if passage_id not in source_ids:
+            source_ids.append(passage_id)
 
     for source_id in source_ids:
         source = sources_by_id.get(source_id)
@@ -664,6 +730,7 @@ def select_answer(question, passages):
         if source and source["score"] >= MIN_PASSAGE_SCORE:
             relevant_sources.append(source)
 
+    # Add other relevant passages only when needed.
     for passage in ranked_passages:
         if len(relevant_sources) >= 3:
             break
@@ -750,9 +817,25 @@ def read_passages(file_path):
 
 def load_passages():
     """
-    Prefer sample passages for testing.
-    Fall back to full textbook embeddings if samples are unavailable.
+    Load full textbook passages when available.
+    Otherwise, fall back to sample science passages.
+
+    Local computer:
+        Uses embeddings.json when available.
+
+    Streamlit Cloud:
+        Uses sample_passages.json when embeddings.json is absent.
     """
+
+    passages = read_passages(EMBEDDINGS_FILE)
+
+    if passages:
+        print("\nFull textbook passages loaded successfully!")
+        print("Available passages:", len(passages))
+        return passages
+
+    print("\nFull textbook embeddings are unavailable.")
+    print("Trying sample science passages...")
 
     passages = read_passages(SAMPLE_FILE)
 
@@ -761,19 +844,9 @@ def load_passages():
         print("Available passages:", len(passages))
         return passages
 
-    print("\nSample passages unavailable.")
-    print("Trying full textbook embeddings...")
-
-    passages = read_passages(EMBEDDINGS_FILE)
-
-    if passages:
-        print("\nTextbook data loaded successfully!")
-        print("Available passages:", len(passages))
-        return passages
-
     print("\nERROR: No passages could be loaded.")
-    print("Checked:", SAMPLE_FILE)
     print("Checked:", EMBEDDINGS_FILE)
+    print("Checked:", SAMPLE_FILE)
 
     return []
 
@@ -800,11 +873,11 @@ def main():
             question = input("\nYour question: ").strip()
 
         except (EOFError, KeyboardInterrupt):
-            print("\nVidya-RAG closed.")
+            print("\nVIDYA-RAG closed.")
             break
 
         if question.lower() in ("exit", "quit"):
-            print("Vidya-RAG closed.")
+            print("VIDYA-RAG closed.")
             break
 
         if not question:
