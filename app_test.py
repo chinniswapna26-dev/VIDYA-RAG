@@ -10,12 +10,10 @@ from collections import Counter
 # SETTINGS
 # ==================================================
 
-EMBEDDINGS_FILE = (
-    Path(__file__).parent
-    / "data"
-    / "textbooks"
-    / "embeddings.json"
-)
+BASE_DIR = Path(__file__).parent
+
+EMBEDDINGS_FILE = BASE_DIR / "data" / "textbooks" / "embeddings.json"
+SAMPLE_FILE = BASE_DIR / "data" / "textbooks" / "sample_passages.json"
 
 MAX_ANSWER_SENTENCES = 3
 MIN_PASSAGE_SCORE = 0.12
@@ -35,7 +33,7 @@ STOP_WORDS = {
     "this", "that", "these", "those", "we", "you",
     "your", "their", "they", "our", "can", "could",
     "would", "should", "function", "please", "about",
-    "give", "define", "into", "does"
+    "give", "define", "into"
 }
 
 TOPIC_TERMS = {
@@ -284,7 +282,6 @@ def score_passage(question, passage_text):
 
         score += min(matches * 0.008, 0.08)
 
-    # Topic-specific relevance checks.
     required_terms = {
         "rainbow": ("rainbow",),
         "twinkle": ("twinkle", "twinkling", "starlight"),
@@ -304,6 +301,10 @@ def score_passage(question, passage_text):
             for term in required_terms[topic]
         ):
             score *= 0.20
+
+    # Reward passages that explicitly mention the requested topic.
+    if topic and topic.replace("_", " ") in lower_text:
+        score += 0.10
 
     return score
 
@@ -336,7 +337,6 @@ def is_bad_sentence(sentence):
     if sum(character.isalpha() for character in text) < 15:
         return True
 
-    # Reject likely textbook navigation and OCR fragments.
     if re.match(
         r"^(?:fig(?:ure)?\.?\s*\d+|activity\s+\d+|"
         r"chapter\s+\d+)",
@@ -347,12 +347,83 @@ def is_bad_sentence(sentence):
     return False
 
 
+def sentence_matches_topic(topic, sentence):
+    """Return True when a sentence is relevant to the requested topic."""
+
+    lower = sentence.lower()
+
+    if topic == "photosynthesis":
+        # Match photosynthesis concepts, but reject unrelated sentences
+        # that happen to mention carbon dioxide or oxygen.
+        return (
+            "photosynthesis" in lower
+            or "chlorophyll" in lower
+            or "glucose" in lower
+            or (
+                "carbon dioxide" in lower
+                and (
+                    "plant" in lower
+                    or "plants" in lower
+                    or "sunlight" in lower
+                    or "photosynthesis" in lower
+                )
+            )
+        )
+
+    if topic == "rainbow":
+        return any(
+            term in lower
+            for term in (
+                "rainbow", "dispersion of sunlight",
+                "water droplets", "prism"
+            )
+        )
+
+    if topic == "twinkle":
+        return any(
+            term in lower
+            for term in (
+                "twinkle", "twinkling", "starlight",
+                "apparent position of the star"
+            )
+        )
+
+    if topic == "eye_lens":
+        return any(
+            term in lower
+            for term in (
+                "lens", "retina", "focal length",
+                "accommodation", "cornea"
+            )
+        )
+
+    if topic == "gravity":
+        return "gravity" in lower or "gravitational" in lower
+
+    if topic == "evaporation":
+        return "evaporation" in lower or "evaporate" in lower
+
+    if topic == "dispersion":
+        return "dispersion" in lower or "splitting" in lower
+
+    if topic == "refraction":
+        return "refraction" in lower or "refract" in lower
+
+    return True
+
+
 # ==================================================
 # SENTENCE SCORING
 # ==================================================
 
 def score_sentence(question, sentence, passage_score):
     if is_bad_sentence(sentence):
+        return -1.0
+
+    topic = detect_topic(question)
+
+    # Reject sentences that do not match the requested topic.
+    if topic and not sentence_matches_topic(topic, sentence):
         return -1.0
 
     question_words = expand_keywords(question)
@@ -370,7 +441,6 @@ def score_sentence(question, sentence, passage_score):
     if 9 <= word_count <= 35:
         score += 0.06
 
-    topic = detect_topic(question)
     lower = sentence.lower()
 
     if topic == "rainbow":
@@ -408,7 +478,6 @@ def score_sentence(question, sentence, passage_score):
             score += 0.25
 
     elif topic == "dispersion":
-        # Strongly prioritize the actual definition.
         if (
             "splitting of white light into its component colours"
             in lower
@@ -484,8 +553,6 @@ def select_answer(question, passages):
                 "passage_score": passage["score"]
             })
 
-    # For a definition question, prioritize sentences that define
-    # the requested topic directly.
     if topic == "dispersion" and definition_question:
         for candidate in candidates:
             lower = candidate["sentence"].lower()
@@ -522,7 +589,6 @@ def select_answer(question, passages):
 
         lower = sentence.lower()
 
-        # Avoid sentences that drift away from the requested topic.
         if topic == "rainbow" and any(
             term in lower
             for term in ("lens system", "human eye", "stars twinkle")
@@ -539,27 +605,9 @@ def select_answer(question, passages):
         ):
             continue
 
-        if topic == "photosynthesis" and not any(
-            term in lower
-            for term in (
-                "photosynthesis", "chlorophyll",
-                "carbon dioxide", "glucose"
-            )
-        ):
+        # Final topic check before adding a sentence to the answer.
+        if topic and not sentence_matches_topic(topic, sentence):
             continue
-
-        if topic == "dispersion":
-            # Do not add general chapter-introduction sentences
-            # to a direct definition answer.
-            if definition_question and not any(
-                term in lower
-                for term in (
-                    "dispersion",
-                    "splitting of white light",
-                    "splitting of light into its component"
-                )
-            ):
-                continue
 
         words = set(get_keywords(sentence))
         duplicate = False
@@ -584,8 +632,11 @@ def select_answer(question, passages):
         selected.append(candidate)
         seen.add(normalized)
 
-        # Definitions should be concise.
-        limit = 1 if topic == "dispersion" and definition_question else MAX_ANSWER_SENTENCES
+        limit = (
+            1
+            if topic == "dispersion" and definition_question
+            else MAX_ANSWER_SENTENCES
+        )
 
         if len(selected) >= limit:
             break
@@ -594,8 +645,6 @@ def select_answer(question, passages):
         item["sentence"] for item in selected
     ]
 
-    # Return sources associated with the strongest selected answers
-    # first, then other highly ranked relevant passages.
     source_ids = []
 
     for item in selected:
@@ -634,23 +683,18 @@ def select_answer(question, passages):
 # LOAD TEXTBOOK PASSAGES
 # ==================================================
 
-def load_passages():
-    if not EMBEDDINGS_FILE.exists():
-        print("\nERROR: Textbook data file not found.")
-        print("Expected location:", EMBEDDINGS_FILE)
-        print("Check your embeddings.json file.")
+def read_passages(file_path):
+    """Read and normalize passages from a JSON file."""
+
+    if not file_path.exists():
         return []
 
     try:
-        with open(
-            EMBEDDINGS_FILE,
-            "r",
-            encoding="utf-8"
-        ) as file:
+        with open(file_path, "r", encoding="utf-8") as file:
             data = json.load(file)
 
     except (OSError, json.JSONDecodeError) as error:
-        print("\nCould not load textbook data:", error)
+        print(f"Could not load {file_path.name}: {error}")
         return []
 
     if isinstance(data, list):
@@ -668,7 +712,6 @@ def load_passages():
             items = list(data.values())
 
     else:
-        print("Unsupported textbook data format.")
         return []
 
     passages = []
@@ -676,6 +719,7 @@ def load_passages():
     for index, item in enumerate(items, start=1):
         if isinstance(item, str):
             text = item
+            passage_id = index
 
         elif isinstance(item, dict):
             text = None
@@ -688,6 +732,8 @@ def load_passages():
             if text is None:
                 continue
 
+            passage_id = item.get("id", index)
+
         else:
             continue
 
@@ -695,14 +741,41 @@ def load_passages():
 
         if text:
             passages.append({
-                "id": index,
+                "id": passage_id,
                 "text": text
             })
 
-    print("\nTextbook loaded successfully!")
-    print("Available passages:", len(passages))
-
     return passages
+
+
+def load_passages():
+    """
+    Prefer sample passages for testing.
+    Fall back to full textbook embeddings if samples are unavailable.
+    """
+
+    passages = read_passages(SAMPLE_FILE)
+
+    if passages:
+        print("\nSample science passages loaded successfully!")
+        print("Available passages:", len(passages))
+        return passages
+
+    print("\nSample passages unavailable.")
+    print("Trying full textbook embeddings...")
+
+    passages = read_passages(EMBEDDINGS_FILE)
+
+    if passages:
+        print("\nTextbook data loaded successfully!")
+        print("Available passages:", len(passages))
+        return passages
+
+    print("\nERROR: No passages could be loaded.")
+    print("Checked:", SAMPLE_FILE)
+    print("Checked:", EMBEDDINGS_FILE)
+
+    return []
 
 
 # ==================================================
