@@ -1,0 +1,12 @@
+# Python virtual environment
+.venv/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Local secrets
+.streamlit/secrets.toml
+
+# Textbook PDF and extracted textbook content
+data/textbooks/
