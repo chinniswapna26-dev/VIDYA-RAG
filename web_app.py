@@ -1,6 +1,10 @@
 import html
+import re
+
 import streamlit as st
+from pypdf import PdfReader
 import app_test
+
 
 st.set_page_config(
     page_title="VIDYA-RAG | Science Doubts Resolver",
@@ -8,14 +12,14 @@ st.set_page_config(
     layout="wide",
 )
 
+
 # --------------------------------------------------
-# PAGE DESIGN AND TEXT VISIBILITY
+# PAGE STYLING
 # --------------------------------------------------
 
 st.markdown(
     """
     <style>
-    /* Main background and default text */
     .stApp {
         background-color: #F8FAFC !important;
         color: #111827 !important;
@@ -26,12 +30,10 @@ st.markdown(
         padding-bottom: 2rem;
     }
 
-    /* Headings */
     h1, h2, h3, h4, h5, h6 {
         color: #1E40AF !important;
     }
 
-    /* Regular text */
     .stApp p,
     .stApp li,
     .stApp label,
@@ -39,7 +41,6 @@ st.markdown(
         color: #111827 !important;
     }
 
-    /* Welcome banner */
     .hero {
         background-color: #DBEAFE !important;
         padding: 28px;
@@ -59,7 +60,6 @@ st.markdown(
         line-height: 1.7;
     }
 
-    /* Sidebar */
     [data-testid="stSidebar"] {
         background-color: #E2E8F0 !important;
     }
@@ -71,13 +71,11 @@ st.markdown(
         color: #111827 !important;
     }
 
-    /* Navigation radio buttons */
     [data-testid="stSidebar"] [data-testid="stRadio"] label {
         background-color: transparent !important;
         padding: 5px;
     }
 
-    /* Text input */
     .stTextInput input {
         background-color: #FFFFFF !important;
         color: #111827 !important;
@@ -90,7 +88,6 @@ st.markdown(
         opacity: 1 !important;
     }
 
-    /* Buttons */
     .stButton button,
     .stFormSubmitButton button {
         background-color: #1D4ED8 !important;
@@ -105,7 +102,6 @@ st.markdown(
         color: #FFFFFF !important;
     }
 
-    /* Expandable source passages */
     [data-testid="stExpander"] {
         background-color: #FFFFFF !important;
         border: 1px solid #CBD5E1 !important;
@@ -121,13 +117,11 @@ st.markdown(
         color: #111827 !important;
     }
 
-    /* Radio options in revision practice */
     [data-testid="stRadio"] label,
     [data-testid="stRadio"] p {
         color: #111827 !important;
     }
 
-    /* Answer card */
     .answer-box {
         background-color: #DBEAFE !important;
         color: #111827 !important;
@@ -143,16 +137,39 @@ st.markdown(
         color: #111827 !important;
     }
 
-    /* Alert boxes */
     [data-testid="stAlert"] p {
         color: #111827 !important;
     }
 
-    /* Footer */
     .footer {
         color: #475569 !important;
         text-align: center;
         padding: 15px;
+    }
+
+    /* LIGHT BLUE PDF UPLOAD AREA */
+
+    [data-testid="stFileUploader"] section {
+        background-color: #EAF4FF !important;
+        border: 2px dashed #3B82F6 !important;
+        border-radius: 12px !important;
+    }
+
+    [data-testid="stFileUploader"] section,
+    [data-testid="stFileUploader"] section * {
+        color: #1E3A8A !important;
+    }
+
+    /* PDF BROWSE BUTTON */
+
+    [data-testid="stFileUploader"] button {
+        background-color: #1D4ED8 !important;
+        color: #FFFFFF !important;
+        border: none !important;
+    }
+
+    [data-testid="stFileUploader"] button * {
+        color: #FFFFFF !important;
     }
     </style>
     """,
@@ -161,13 +178,88 @@ st.markdown(
 
 
 # --------------------------------------------------
-# LOAD TEXTBOOK PASSAGES
+# LOAD ORIGINAL TEXTBOOK
 # --------------------------------------------------
 
 @st.cache_resource
 def get_passages():
     return app_test.load_passages()
 
+
+# --------------------------------------------------
+# PDF TEXT EXTRACTION
+# --------------------------------------------------
+
+def extract_pdf_passages(uploaded_file):
+    """Extract readable text from each page of an uploaded PDF."""
+
+    reader = PdfReader(uploaded_file)
+    result = []
+
+    for page_number, page in enumerate(reader.pages, start=1):
+        text = page.extract_text() or ""
+
+        if text.strip():
+            result.append({
+                "id": page_number,
+                "text": text.strip()
+            })
+
+    return result
+
+
+# --------------------------------------------------
+# SEARCH UPLOADED PDF
+# --------------------------------------------------
+
+def search_pdf(question, pdf_passages):
+    """Find PDF pages that best match the question keywords."""
+
+    stop_words = {
+        "the", "is", "are", "a", "an", "of", "in", "on",
+        "to", "and", "what", "why", "how", "does", "do",
+        "explain", "describe", "for", "with", "it", "which",
+        "this", "that", "from", "by", "can", "be", "was",
+        "were", "about"
+    }
+
+    terms = {
+        word
+        for word in re.findall(r"[a-z0-9]+", question.lower())
+        if len(word) > 1 and word not in stop_words
+    }
+
+    if not terms:
+        return []
+
+    results = []
+
+    for passage in pdf_passages:
+        words = set(
+            re.findall(r"[a-z0-9]+", passage["text"].lower())
+        )
+
+        matches = terms.intersection(words)
+
+        if matches:
+            results.append({
+                "id": passage["id"],
+                "text": passage["text"],
+                "score": len(matches) / len(terms),
+                "matched": len(matches)
+            })
+
+    results.sort(
+        key=lambda item: (item["score"], item["matched"]),
+        reverse=True
+    )
+
+    return results[:3]
+
+
+# --------------------------------------------------
+# LOAD TEXTBOOK DATA
+# --------------------------------------------------
 
 try:
     passages = get_passages()
@@ -199,8 +291,8 @@ page = st.sidebar.radio(
         "🏠 Home",
         "🔎 Ask a Question",
         "📖 Textbook Sources",
-        "📝 Revision Practice",
-    ],
+        "📝 Revision Practice"
+    ]
 )
 
 st.sidebar.divider()
@@ -232,7 +324,7 @@ if page == "🏠 Home":
             </p>
         </div>
         """,
-        unsafe_allow_html=True,
+        unsafe_allow_html=True
     )
 
     st.subheader("Explore VIDYA-RAG")
@@ -277,63 +369,188 @@ elif page == "🔎 Ask a Question":
     st.title("🔎 Ask a Science Question")
 
     st.write(
-        "Enter a question about a topic covered in your science textbook."
+        "Ask about your loaded textbook or upload a PDF "
+        "to search its readable text."
     )
 
+    # PDF UPLOAD WIDGET
+    uploaded_pdf = st.file_uploader(
+        "📄 Upload a science textbook PDF (optional)",
+        type=["pdf"],
+        help=(
+            "PDFs must contain selectable text. "
+            "Scanned image-only PDFs may need OCR."
+        ),
+        key="science_pdf_upload"
+    )
+
+    pdf_passages = None
+
+    if uploaded_pdf is not None:
+
+        try:
+            with st.spinner("Reading your PDF..."):
+                pdf_passages = extract_pdf_passages(uploaded_pdf)
+
+            if pdf_passages:
+                st.success(
+                    f"PDF loaded! Readable text found on "
+                    f"{len(pdf_passages)} page(s)."
+                )
+            else:
+                st.warning(
+                    "No selectable text was found. This may be "
+                    "a scanned PDF; OCR is not included yet."
+                )
+
+        except Exception as error:
+            st.error(
+                "I couldn't read this PDF. Please try another PDF file."
+            )
+            st.caption(str(error))
+
+    # SELECT SEARCH SOURCE
+    source_choice = st.radio(
+        "Where should VIDYA-RAG search?",
+        [
+            "Original science textbook",
+            "Uploaded PDF"
+        ],
+        horizontal=True,
+        key="question_source_choice"
+    )
+
+    # QUESTION FORM
     with st.form("question_form"):
 
         question = st.text_input(
             "Your science question",
-            placeholder="Example: What is dispersion of light?",
+            placeholder="Example: What is dispersion of light?"
         )
 
         submitted = st.form_submit_button(
             "🔍 Ask VIDYA-RAG",
-            use_container_width=True,
+            use_container_width=True
         )
 
+    # PROCESS QUESTION
     if submitted:
 
         if not question.strip():
 
             st.warning("Please enter a question first.")
 
+        elif source_choice == "Uploaded PDF" and uploaded_pdf is None:
+
+            st.warning(
+                "Please upload a PDF first, or choose the original textbook."
+            )
+
+        elif source_choice == "Uploaded PDF" and not pdf_passages:
+
+            st.warning(
+                "There is no readable text to search in this PDF."
+            )
+
         else:
 
             try:
+                with st.spinner("Searching your selected source..."):
 
-                with st.spinner("Searching your science textbook..."):
+                    if source_choice == "Uploaded PDF":
 
-                    answer, sources = app_test.select_answer(
-                        question.strip(),
-                        passages,
-                    )
+                        sources = search_pdf(
+                            question.strip(),
+                            pdf_passages
+                        )
+
+                        answer = []
+
+                        if sources:
+
+                            sentences = re.split(
+                                r"(?<=[.!?])\s+",
+                                sources[0]["text"]
+                            )
+
+                            terms = {
+                                word
+                                for word in re.findall(
+                                    r"[a-z0-9]+",
+                                    question.lower()
+                                )
+                                if len(word) > 2
+                            }
+
+                            ranked = sorted(
+                                enumerate(sentences),
+                                key=lambda item: (
+                                    len(
+                                        terms.intersection(
+                                            set(
+                                                re.findall(
+                                                    r"[a-z0-9]+",
+                                                    item[1].lower()
+                                                )
+                                            )
+                                        )
+                                    ),
+                                    -item[0]
+                                ),
+                                reverse=True
+                            )
+
+                            answer = [
+                                sentence.strip()
+                                for _, sentence in ranked[:3]
+                                if sentence.strip()
+                            ]
+
+                    else:
+
+                        answer, sources = app_test.select_answer(
+                            question.strip(),
+                            passages
+                        )
 
                 st.divider()
                 st.subheader("📝 Your Answer")
 
                 if answer:
 
-                    answer_text = " ".join(answer)
+                    if source_choice == "Uploaded PDF":
+                        label = "Relevant text from your PDF"
+                    else:
+                        label = "Answer"
+
+                    answer_html = (
+                        '<div class="answer-box">'
+                        '<strong>💡 '
+                        + label
+                        + '</strong><br><br>'
+                        + html.escape(" ".join(answer))
+                        + '</div>'
+                    )
 
                     st.markdown(
-                        (
-                            '<div class="answer-box">'
-                            '<strong>💡 Answer</strong><br><br>'
-                            f'{html.escape(answer_text)}'
-                            '</div>'
-                        ),
-                        unsafe_allow_html=True,
+                        answer_html,
+                        unsafe_allow_html=True
                     )
+
+                    if source_choice == "Uploaded PDF":
+                        st.caption(
+                            "These are excerpts found in your PDF, "
+                            "not a newly generated explanation."
+                        )
 
                 else:
 
                     st.warning(
                         "I couldn't find a sufficiently relevant answer "
-                        "in the loaded textbook. Try rephrasing your question."
+                        "in the selected source. Try rephrasing your question."
                     )
 
-                st.subheader("📚 Supporting Textbook Passages")
+                st.subheader("📚 Supporting Source Passages")
 
                 if sources:
 
@@ -342,15 +559,19 @@ elif page == "🔎 Ask a Question":
                         source_id = source.get("id", "Unknown")
                         score = source.get("score", 0)
 
-                        source_text = app_test.clean_text(
-                            source.get("text", "")
-                        )
+                        if source_choice == "Uploaded PDF":
+                            source_text = source.get("text", "")
+                            title = f"PDF page {source_id}"
+                        else:
+                            source_text = app_test.clean_text(
+                                source.get("text", "")
+                            )
+                            title = f"Textbook passage {source_id}"
 
                         with st.expander(
-                            f"Source {index} | Passage {source_id} "
-                            f"| Relevance score: {score:.3f}"
+                            f"Source {index} | {title} | "
+                            f"Relevance: {score:.3f}"
                         ):
-
                             st.write(source_text)
 
                 else:
@@ -364,7 +585,6 @@ elif page == "🔎 Ask a Question":
                 st.error(
                     "Something went wrong while answering your question."
                 )
-
                 st.exception(error)
 
 
@@ -383,10 +603,10 @@ elif page == "📖 Textbook Sources":
     search_text = st.text_input(
         "Search textbook passages",
         placeholder="Enter a keyword, such as light or eye...",
-        key="source_search",
+        key="source_search"
     )
 
-    matching_passages = []
+    matching = []
 
     for index, passage in enumerate(passages, start=1):
 
@@ -398,18 +618,15 @@ elif page == "📖 Textbook Sources":
             not search_text.strip()
             or search_text.lower() in text.lower()
         ):
-
-            matching_passages.append(
-                (index, passage, text)
-            )
+            matching.append((index, passage, text))
 
     st.write(
-        f"Found {len(matching_passages)} matching passage(s)."
+        f"Found {len(matching)} matching passage(s)."
     )
 
-    if matching_passages:
+    if matching:
 
-        for index, passage, text in matching_passages:
+        for index, passage, text in matching:
 
             passage_id = passage.get("id", index)
 
@@ -420,7 +637,9 @@ elif page == "📖 Textbook Sources":
                 if text.strip():
                     st.write(text)
                 else:
-                    st.caption("This passage contains no readable text.")
+                    st.caption(
+                        "This passage contains no readable text."
+                    )
 
     else:
 
@@ -448,19 +667,21 @@ elif page == "📝 Revision Practice":
                 "Dispersion of sunlight by water droplets",
                 "Sound waves in the air",
                 "Movement of the Moon",
-                "Shadows from trees",
+                "Shadows from trees"
             ],
-            "answer": "Dispersion of sunlight by water droplets",
+            "answer": "Dispersion of sunlight by water droplets"
         },
         {
-            "question": "Which part of the eye helps focus light on the retina?",
+            "question": (
+                "Which part of the eye helps focus light on the retina?"
+            ),
             "options": [
                 "Eyelid",
                 "Eye lens",
                 "Eyebrow",
-                "Optic nerve",
+                "Optic nerve"
             ],
-            "answer": "Eye lens",
+            "answer": "Eye lens"
         },
         {
             "question": "Why do stars appear to twinkle?",
@@ -468,9 +689,9 @@ elif page == "📝 Revision Practice":
                 "They switch on and off",
                 "Atmospheric refraction",
                 "They change colour every second",
-                "The Moon covers them",
+                "The Moon covers them"
             ],
-            "answer": "Atmospheric refraction",
+            "answer": "Atmospheric refraction"
         },
         {
             "question": "What is dispersion of light?",
@@ -478,35 +699,39 @@ elif page == "📝 Revision Practice":
                 "Splitting white light into its component colours",
                 "Blocking all light",
                 "Producing sound from light",
-                "Turning light into water",
+                "Turning light into water"
             ],
-            "answer": "Splitting white light into its component colours",
-        },
+            "answer": (
+                "Splitting white light into its component colours"
+            )
+        }
     ]
 
     with st.form("revision_form"):
 
-        chosen_answers = {}
+        chosen = {}
 
         for index, item in enumerate(questions):
 
-            st.markdown(f"### Question {index + 1}")
+            st.markdown(
+                f"### Question {index + 1}"
+            )
 
             st.write(item["question"])
 
-            chosen_answers[index] = st.radio(
+            chosen[index] = st.radio(
                 "Choose one answer:",
                 item["options"],
                 index=None,
-                key=f"revision_answer_{index}",
+                key=f"revision_answer_{index}"
             )
 
-        check_answers = st.form_submit_button(
+        check = st.form_submit_button(
             "✅ Check My Answers",
-            use_container_width=True,
+            use_container_width=True
         )
 
-    if check_answers:
+    if check:
 
         score = 0
         unanswered = 0
@@ -516,12 +741,11 @@ elif page == "📝 Revision Practice":
 
         for index, item in enumerate(questions):
 
-            selected = chosen_answers[index]
+            selected = chosen[index]
 
             if selected is None:
 
                 unanswered += 1
-
                 st.warning(
                     f"Question {index + 1}: Not answered."
                 )
@@ -529,7 +753,6 @@ elif page == "📝 Revision Practice":
             elif selected == item["answer"]:
 
                 score += 1
-
                 st.success(
                     f"Question {index + 1}: Correct!"
                 )
@@ -548,9 +771,12 @@ elif page == "📝 Revision Practice":
         if score == len(questions):
 
             st.balloons()
-            st.success("Excellent! You answered every question correctly.")
 
-        elif unanswered > 0:
+            st.success(
+                "Excellent! You answered every question correctly."
+            )
+
+        elif unanswered:
 
             st.info(
                 "Try answering the remaining questions and practise again."
@@ -576,5 +802,5 @@ st.markdown(
         Helping students explore science, one question at a time.
     </div>
     """,
-    unsafe_allow_html=True,
+    unsafe_allow_html=True
 )
