@@ -1,0 +1,24 @@
+{
+  "passages": [
+    {
+      "id": 1,
+      "text": "Photosynthesis is the process by which green plants use sunlight, carbon dioxide, and water to produce glucose and oxygen. Chlorophyll in the leaves absorbs the sunlight needed for this process."
+    },
+    {
+      "id": 2,
+      "text": "The water cycle is the continuous movement of water between Earth's surface and the atmosphere. Its main stages include evaporation, condensation, precipitation, and collection."
+    },
+    {
+      "id": 3,
+      "text": "Force is a push or pull that can change an object's motion or shape. Forces can cause objects to start moving, stop moving, speed up, slow down, or change direction."
+    },
+    {
+      "id": 4,
+      "text": "The human respiratory system helps the body take in oxygen and remove carbon dioxide. Air travels through the nose or mouth, windpipe, and airways before reaching the lungs."
+    },
+    {
+      "id": 5,
+      "text": "An ecosystem consists of living organisms and the non-living parts of their environment interacting with one another. Plants, animals, water, air, and soil can all be parts of an ecosystem."
+    }
+  ]
+}
